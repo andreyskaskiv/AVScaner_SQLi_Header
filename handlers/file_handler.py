@@ -20,7 +20,7 @@ async def read_file_to_list(file_path: str) -> list:
             if len(content_list) % 1000 == 0:
                 await asyncio.sleep(0)
 
-    print(f'{C.yellow}[*] Total number of payload variants per link: {C.bold_yellow}{len(content_list)}\n\n{C.norm}')
+    print(f'{C.yellow}[*] Total number of {file_path} variants per link: {C.bold_yellow}{len(content_list)}{C.norm}')
     return content_list
 
 
