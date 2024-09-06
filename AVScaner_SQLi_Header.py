@@ -9,7 +9,7 @@ from aiohttp import ClientConnectorCertificateError, ClientSSLError
 from aiohttp import ClientSession
 
 from handlers.DTO import UrlHeader
-from handlers.file_handler import read_file_to_queue, read_file_to_list
+from handlers.file_handler import read_file_to_queue, read_file_to_list, write_to_file
 from handlers.parse_arguments import parse_arguments
 from handlers.utils import C, timer_decorator, limit_rate_decorator
 from handlers.various_headers import USER_AGENTS, CUSTOM_HEADERS
@@ -22,6 +22,8 @@ PAYLOADS = PARSE_ARGS.payloads
 BYPASS_PAYLOADS = PARSE_ARGS.bypass
 CALL_LIMIT_PER_SECOND = PARSE_ARGS.concurrency
 TIMEOUT = PARSE_ARGS.timeout
+BYPASS_ONLY_FALSE_POSITIVE = PARSE_ARGS.bypass_only_false_positive
+BYPASS_ALL = PARSE_ARGS.bypass_all
 PROXY = PARSE_ARGS.proxy
 
 
@@ -66,6 +68,7 @@ async def make_request(url: str, header: dict, session: ClientSession) -> (
         print(f'{C.red}[!] Unexpected Error in make_request for {url} {e}{C.norm}')
         return url, None, None
 
+
 @limit_rate_decorator(calls_limit=CALL_LIMIT_PER_SECOND, timeout=1)
 async def process_bypass_waf(req: UrlHeader, bypass_patterns: list[str]):
     tasks = []
@@ -81,11 +84,11 @@ async def process_bypass_waf(req: UrlHeader, bypass_patterns: list[str]):
             if response_status == 200 and response_time >= int(req.timeout):
                 color = C.bold_green
 
-                # output_folder = 'output_report'
-                # output_file = f'{output_folder}/vulnerable_headers.txt'
-                # await write_to_file(f'URL: {url} | Status: {response_status} | '
-                #                     f'Response time: {response_time:.2f} sec | Header: {header}',
-                #                     output_file)
+                output_folder = 'output_report'
+                output_file = f'{output_folder}/vulnerable_headers.txt'
+                await write_to_file(f'URL: {url} | Status: {response_status} | '
+                                    f'Response time: {response_time:.2f} sec | Header: {header}',
+                                    output_file)
 
             elif response_status == 403 and response_time > int(req.timeout):
                 color = C.yellow
@@ -122,26 +125,28 @@ async def analyze_response(url_number: int, url: str,
     if response_status == 200 and response_time >= timeout:
         color = C.bold_green
 
-        # output_file = f'{output_folder}/vulnerable_headers.txt'
-        # await write_to_file(f'URL: {url} | Status: {response_status} | '
-        #                     f'Response time: {response_time:.2f} sec | Header: {header}',
-        #                     output_file)
+        output_file = f'{output_folder}/vulnerable_headers.txt'
+        await write_to_file(f'URL: {url} | Status: {response_status} | '
+                            f'Response time: {response_time:.2f} sec | Header: {header}',
+                            output_file)
 
     elif response_status == 403 and response_time > timeout:
         color = C.bold_magenta
 
-        # output_file = f'{output_folder}/vulnerable_headers_403.txt'
-        # await write_to_file(f'URL: {url} | Status: {response_status} | '
-        #                     f'Response time: {response_time:.2f} sec | Header: {header}',
-        #                     output_file)
+        if BYPASS_ONLY_FALSE_POSITIVE:
+            url_header = UrlHeader(url, header, timeout, session)
+            await link_bypass_queue.put(url_header)
+
+        output_file = f'{output_folder}/vulnerable_headers_403.txt'
+        await write_to_file(f'URL: {url} | Status: {response_status} | '
+                            f'Response time: {response_time:.2f} sec | Header: {header}',
+                            output_file)
 
     elif response_status == 403 and response_time < timeout:
         color = C.white
         color_status = C.red
 
-        flag = 0
-
-        if flag == 1:
+        if BYPASS_ALL:
             url_header = UrlHeader(url, header, timeout, session)
             await link_bypass_queue.put(url_header)
 
@@ -177,12 +182,10 @@ async def process_link(link: str, link_bypass_queue, payload_patterns: list[str]
 
     timeout_10s_int = int(timeout_10s)
     for url_number, as_completed in enumerate(asyncio.as_completed(tasks)):
-        await asyncio.sleep(0)
         try:
             url, response_status, header, response_time = await as_completed
             await analyze_response(url_number, url, response_status, header, response_time, timeout_10s_int,
                                    link_bypass_queue, session)
-            await asyncio.sleep(0)
 
         except Exception as e:
             print(f"{C.red}[!] Error in process_link task: {e}{C.norm}")
